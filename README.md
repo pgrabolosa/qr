@@ -1,0 +1,123 @@
+# qr
+
+A small macOS command-line tool that generates QR Codes as PNG, JPEG, TIFF, PDF, SVG, or text in the terminal.
+
+```sh
+qr --format=png --size=500px "https://www.apple.com/"
+```
+
+It's written in Swift and has no third-party dependencies. The QR encoder is written from scratch using only Foundation. Drawing uses CoreGraphics, and ImageIO saves the image formats.
+
+## Requirements
+
+- macOS 13 or later
+- Swift 6 toolchain (Xcode 16+ or the Command Line Tools: `xcode-select --install`)
+
+## Installation
+
+### Build and install to `/usr/local/bin`
+
+```sh
+git clone <repository-url> qr   # or download and unpack the sources
+cd qr
+swift build -c release
+sudo install .build/release/qr /usr/local/bin/qr
+```
+
+Check that it works:
+
+```sh
+qr --help
+```
+
+### Install without `sudo`
+
+Install into a directory you own, and make sure it's on your `PATH`:
+
+```sh
+swift build -c release
+mkdir -p ~/.local/bin
+install .build/release/qr ~/.local/bin/qr
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # if not already on PATH
+```
+
+### Run without installing
+
+```sh
+swift run qr -f text "Hello"
+```
+
+### Uninstall
+
+```sh
+sudo rm /usr/local/bin/qr      # or: rm ~/.local/bin/qr
+```
+
+## Usage
+
+```
+qr [options] [text ...]
+```
+
+The text to encode comes from the arguments. Multiple arguments are joined with spaces. With no text (or `-`), `qr` reads from standard input and ignores a single trailing newline.
+
+| Option | Description |
+| --- | --- |
+| `-f`, `--format=FORMAT` | `png` (default), `jpeg`, `tiff`, `pdf`, `svg`, or `text`. When omitted, the format is taken from the `--output` file extension. |
+| `-s`, `--size=SIZE` | Width and height, e.g. `500px` (default `512px`). Points for PDF; ignored for `text`. |
+| `-o`, `--output=PATH` | Output file, or `-` for standard output. |
+| `-e`, `--ecc=LEVEL` | Minimum error correction: `L` (~7%), `M` (~15%, default), `Q` (~25%), `H` (~30%). Raised automatically when that doesn't make the code bigger. |
+| `-m`, `--margin=N` | Width of the white border (quiet zone) in modules (default `4`). |
+| `-h`, `--help` | Show help. |
+
+### Where the output goes
+
+- With `--output`, the code is written to that file.
+- Otherwise it goes to standard output, so you can redirect or pipe it.
+- If standard output is a terminal and the format is binary (PNG, JPEG, TIFF, PDF), `qr` saves to `./qr.<ext>` instead and prints the file name.
+
+### Examples
+
+```sh
+# PNG, 500×500 pixels (saved as ./qr.png when run in a terminal)
+qr --format=png --size=500px "https://www.apple.com/"
+
+# Choose the file name; the format comes from the extension
+qr -o apple.pdf "https://www.apple.com/"
+
+# Read from standard input
+echo "Hello, world" | qr -f svg -o hello.svg
+pbpaste | qr > clipboard.png
+
+# Show the code right in the terminal
+qr -f text "https://www.apple.com/"
+
+# Wi-Fi network with high error correction
+qr -e H -o wifi.png "WIFI:T:WPA;S:MyNetwork;P:secret;;"
+```
+
+### Exit status
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success |
+| `1` | Encoding or rendering error (e.g. text too long, size too small) |
+| `64` | Invalid command-line usage |
+
+## Development
+
+```sh
+swift build          # debug build
+swift test           # run the tests
+```
+
+The tests decode every generated code with CoreImage's built-in QR detector. They cover all error-correction levels, all eight mask patterns, and a range of code sizes.
+
+### Layout
+
+| Path | Contents |
+| --- | --- |
+| `Sources/QRCore/QRCode.swift` | QR encoder: mode selection, Reed–Solomon error correction, module placement, masking |
+| `Sources/QRCore/Rendering.swift` | Output: CoreGraphics drawing, ImageIO for PNG/JPEG/TIFF, PDF, SVG, terminal text |
+| `Sources/qr/QRCommand.swift` | Command-line parsing and I/O |
+| `Tests/QRCoreTests/` | Tests |
