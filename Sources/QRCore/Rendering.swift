@@ -24,6 +24,14 @@ public enum OutputFormat: String, CaseIterable, Sendable {
         }
     }
 
+    /// Whether the format can store transparency.
+    public var supportsTransparency: Bool {
+        switch self {
+        case .png, .tiff, .pdf, .svg: true
+        case .jpeg, .text: false
+        }
+    }
+
     /// Whether the output is binary (and therefore unsuitable for a terminal).
     public var isBinary: Bool {
         switch self {
@@ -60,10 +68,16 @@ public struct QRRenderer: Sendable {
     public var code: QRCode
     /// Quiet zone width, in modules (the specification recommends 4).
     public var margin: Int
+    /// Color of the dark modules.
+    public var foreground: QRColor
+    /// Color of the light modules and quiet zone.
+    public var background: QRColor
 
-    public init(code: QRCode, margin: Int = 4) {
+    public init(code: QRCode, margin: Int = 4, foreground: QRColor = .black, background: QRColor = .white) {
         self.code = code
         self.margin = max(0, margin)
+        self.foreground = foreground
+        self.background = background
     }
 
     /// Modules per side, including the quiet zone.
@@ -71,7 +85,8 @@ public struct QRRenderer: Sendable {
 
     public func render(as format: OutputFormat, size: Int, ansiColors: Bool = false) throws -> Data {
         switch format {
-        case .png, .jpeg, .tiff: try rasterData(format: format, pixels: size)
+        case .png, .jpeg, .tiff:
+            try rasterData(format: format, pixels: size, transparent: format.supportsTransparency)
         case .pdf: try pdfData(points: size)
         case .svg: Data(svg(size: size).utf8)
         case .text: Data(text(ansiColors: ansiColors).utf8)
@@ -93,9 +108,11 @@ public struct QRRenderer: Sendable {
         context.saveGState()
         defer { context.restoreGState() }
         context.setShouldAntialias(!pixelAligned)
-        context.setFillColor(gray: 1, alpha: 1)
-        context.fill(CGRect(x: 0, y: 0, width: side, height: side))
-        context.setFillColor(gray: 0, alpha: 1)
+        if background.alpha > 0 {
+            context.setFillColor(background.cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        }
+        context.setFillColor(foreground.cgColor)
 
         var rects: [CGRect] = []
         for y in 0..<code.size {
@@ -114,16 +131,27 @@ public struct QRRenderer: Sendable {
         context.fill(rects)
     }
 
-    public func makeImage(pixels: Int) throws -> CGImage {
+    /// Renders a bitmap. With `transparent` false, a translucent background is composited over white.
+    ///
+    /// Plain black-on-white produces an 8-bit grayscale image; other colors produce sRGB,
+    /// with an alpha channel only when the background is translucent.
+    public func makeImage(pixels: Int, transparent: Bool = true) throws -> CGImage {
         guard pixels >= totalModules else {
             throw RenderError.sizeTooSmall(requested: pixels, minimum: totalModules)
         }
+        let needsAlpha = transparent && !background.isOpaque
+        let isGray = !needsAlpha && [foreground, background].allSatisfy { $0 == .black || $0 == .white }
+        let space = isGray ? CGColorSpaceCreateDeviceGray() : CGColorSpace(name: CGColorSpace.sRGB)!
+        let alphaInfo: CGImageAlphaInfo = needsAlpha ? .premultipliedLast : isGray ? .none : .noneSkipLast
         guard let context = CGContext(
             data: nil, width: pixels, height: pixels,
             bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceGray(),
-            bitmapInfo: CGImageAlphaInfo.none.rawValue
+            space: space, bitmapInfo: alphaInfo.rawValue
         ) else { throw RenderError.graphicsFailure("could not create bitmap context") }
+        if !background.isOpaque && !needsAlpha {
+            context.setFillColor(QRColor.white.cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: pixels, height: pixels))
+        }
         draw(in: context, side: CGFloat(pixels), pixelAligned: true)
         guard let image = context.makeImage() else {
             throw RenderError.graphicsFailure("could not create image")
@@ -131,8 +159,8 @@ public struct QRRenderer: Sendable {
         return image
     }
 
-    private func rasterData(format: OutputFormat, pixels: Int) throws -> Data {
-        let image = try makeImage(pixels: pixels)
+    private func rasterData(format: OutputFormat, pixels: Int, transparent: Bool) throws -> Data {
+        let image = try makeImage(pixels: pixels, transparent: transparent)
         let data = NSMutableData()
         guard let type = format.imageType,
               let destination = CGImageDestinationCreateWithData(data as CFMutableData, type, 1, nil)
@@ -172,21 +200,43 @@ public struct QRRenderer: Sendable {
                 path += "M\(start + margin) \(y + margin)h\(x - start)v1h-\(x - start)z"
             }
         }
+        func fill(_ color: QRColor) -> String {
+            color.isOpaque
+                ? "fill=\"\(color.hexRGB)\""
+                : "fill=\"\(color.hexRGB)\" fill-opacity=\"\(String(format: "%.3g", color.alpha))\""
+        }
         let n = totalModules
-        return """
+        var svg = """
         <?xml version="1.0" encoding="UTF-8"?>
         <svg xmlns="http://www.w3.org/2000/svg" width="\(size)" height="\(size)" viewBox="0 0 \(n) \(n)" shape-rendering="crispEdges">
-        <rect width="\(n)" height="\(n)" fill="#fff"/>
-        <path fill="#000" d="\(path)"/>
-        </svg>
 
         """
+        if background.alpha > 0 {
+            svg += "<rect width=\"\(n)\" height=\"\(n)\" \(fill(background))/>\n"
+        }
+        svg += "<path \(fill(foreground)) d=\"\(path)\"/>\n</svg>\n"
+        return svg
     }
 
     /// Two module rows per text line using half-block characters.
-    /// With `ansiColors`, forces black-on-white so it scans on dark terminal themes too.
+    /// With `ansiColors`, sets the terminal colors explicitly so the code scans on dark themes too
+    /// (24-bit color for custom colors; a transparent background keeps the terminal's own).
     public func text(ansiColors: Bool) -> String {
-        let (on, off) = ansiColors ? ("\u{1B}[30;107m", "\u{1B}[0m") : ("", "")
+        var on = "", off = ""
+        if ansiColors {
+            off = "\u{1B}[0m"
+            if foreground == .black && background == .white {
+                on = "\u{1B}[30;107m"
+            } else {
+                let fg = foreground.composited(over: background.alpha > 0 ? background : .black).rgb8
+                on = "\u{1B}[38;2;\(fg.red);\(fg.green);\(fg.blue)"
+                if background.alpha > 0 {
+                    let bg = background.rgb8
+                    on += ";48;2;\(bg.red);\(bg.green);\(bg.blue)"
+                }
+                on += "m"
+            }
+        }
         var output = ""
         for y in stride(from: -margin, to: code.size + margin, by: 2) {
             output += on
@@ -201,5 +251,11 @@ public struct QRRenderer: Sendable {
             output += off + "\n"
         }
         return output
+    }
+}
+
+extension QRColor {
+    public var cgColor: CGColor {
+        CGColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
     }
 }

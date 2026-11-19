@@ -95,6 +95,8 @@ The text to encode comes from the arguments. Multiple arguments are joined with 
 | `-o`, `--output <path>` | Output file, or `-` for standard output. |
 | `-e`, `--ecc <ecc>` | Minimum error correction: `L` (~7%), `M` (~15%, default), `Q` (~25%), `H` (~30%). Raised automatically when that doesn't make the code bigger. |
 | `-m`, `--margin <margin>` | Width of the white border (quiet zone) in modules (default `4`). |
+| `--foreground`, `--fg <color>` | Color of the dark modules (default `black`). See [Colors](#colors). |
+| `--background`, `--bg <color>` | Background color, or `transparent` for none (default `white`). See [Colors](#colors). |
 | `-h`, `--help` | Show help. |
 
 Long options accept their value either after a space or after `=` (`--size 500px` or `--size=500px`).
@@ -123,7 +125,36 @@ qr -f text "https://www.apple.com/"
 
 # Wi-Fi network with high error correction
 qr -e H -o wifi.png "WIFI:T:WPA;S:MyNetwork;P:secret;;"
+
+# Red code on a transparent background
+qr -o red.png --fg red --bg transparent "Hello, world!"
 ```
+
+### Colors
+
+`--fg` and `--bg` accept CSS color syntax:
+
+| Syntax | Examples |
+| --- | --- |
+| Named colors (all 148 CSS names) | `red`, `navy`, `rebeccapurple` |
+| Transparent | `transparent`, `clear` |
+| Hex: `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA` | `#f00`, `#FF0000`, `#FFFFFF00` |
+| `rgb()` / `rgba()` | `rgb(255, 0, 0)`, `rgba(255, 255, 255, 0.0)`, `rgb(255 0 0 / 50%)`, `rgb(100% 0% 0%)` |
+| `hsl()` / `hsla()` | `hsl(0, 100%, 50%)`, `hsl(120deg 100% 25% / 0.5)` |
+
+Names are case-insensitive, and the `#` on hex colors is optional. Quote colors containing `#`, spaces or parentheses in the shell.
+
+```sh
+qr -o my_qr.png --fg "#FF0000" --bg "#FFFFFF00" "Hello, world!"
+qr -o my_qr.png --fg red --bg clear "Hello, world!"
+qr -o my_qr.png --fg "rgb(255, 0, 0)" --bg "rgba(255, 255, 255, 0.0)" "Hello, world!"
+```
+
+Notes:
+
+- PNG, TIFF, PDF and SVG keep transparency. JPEG has none, so a translucent background is composited over white.
+- In the terminal (`-f text`), custom colors use 24-bit color escape codes, and a transparent background shows the terminal's own background.
+- Scanners need dark modules on a lighter background. `qr` prints a warning when the contrast is low, or when the foreground is lighter than the background (inverted codes, which not every scanner reads).
 
 ### Exit status
 
@@ -147,6 +178,7 @@ The tests decode every generated code with CoreImage's built-in QR detector. The
 | Path | Contents |
 | --- | --- |
 | `Sources/QRCore/QRCode.swift` | QR encoder: mode selection, Reed–Solomon error correction, module placement, masking |
+| `Sources/QRCore/QRColor.swift` | CSS color parsing |
 | `Sources/QRCore/Rendering.swift` | Output: CoreGraphics drawing, ImageIO for PNG/JPEG/TIFF, PDF, SVG, terminal text |
 | `Sources/qr/QRCommand.swift` | Command-line interface (Swift Argument Parser) and I/O |
 | `Tests/QRCoreTests/` | Tests |
