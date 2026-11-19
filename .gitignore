@@ -1,0 +1,20 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+/Packages/
+
+# Xcode
+xcuserdata/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+!*.xcworkspace/contents.xcworkspacedata
+
+# macOS
+.DS_Store
+
+# Default output files written by `qr` when run from the repository root
+/qr.png
+/qr.jpeg
+/qr.tiff
+/qr.pdf

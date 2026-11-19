@@ -1,163 +1,70 @@
+import ArgumentParser
 import Foundation
 import QRCore
 
 @main
-struct QRCommand {
-    static let usage = """
-    USAGE: qr [options] [text ...]
+struct QRCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "qr",
+        abstract: "Generate a QR Code from text given as arguments or on standard input.",
+        discussion: """
+        With no text (or "-"), reads from standard input; a single trailing newline is ignored.
 
-    Generates a QR Code for TEXT. With no text (or "-"), reads from standard input;
-    a single trailing newline from stdin is ignored.
+        Without --output, the code is written to standard output — unless that is a terminal \
+        and the format is binary, in which case it is saved as ./qr.<ext>.
 
-    OPTIONS:
-      -f, --format=FORMAT   png (default), jpeg, tiff, pdf, svg, or text
-                            (inferred from --output's extension when omitted)
-      -s, --size=SIZE       Image width/height, e.g. 500px (default: 512px).
-                            Points for PDF; ignored for text.
-      -o, --output=PATH     Output file, or "-" for stdout. Defaults to stdout,
-                            or to ./qr.<ext> when stdout is a terminal and the
-                            format is binary.
-      -e, --ecc=LEVEL       Minimum error correction: L, M (default), Q, H.
-                            Raised automatically when it doesn't grow the code.
-      -m, --margin=N        Quiet zone in modules (default: 4).
-      -h, --help            Show this help.
+        EXAMPLES:
+          qr --format=png --size=500px "https://www.apple.com/"
+          echo "hello" | qr -f svg -o hello.svg
+          qr -f text "WIFI:T:WPA;S:MyNetwork;P:secret;;"
+        """
+    )
 
-    EXAMPLES:
-      qr --format=png --size=500px "https://www.apple.com/"
-      echo "hello" | qr -f svg -o hello.svg
-      qr -f text "WIFI:T:WPA;S:MyNetwork;P:secret;;"
-    """
+    @Option(name: .shortAndLong,
+            help: "Output format. Inferred from --output's extension when omitted (default: png).")
+    var format: OutputFormat?
 
-    struct Options {
-        var format: OutputFormat?
-        var size = 512
-        var output: String?
-        var ecc: QRCode.ErrorCorrection = .medium
-        var margin = 4
-        var text: [String] = []
+    @Option(name: .shortAndLong,
+            help: "Image width and height, e.g. 500px. Points for PDF; ignored for text.")
+    var size: Size = Size(512)
+
+    @Option(name: .shortAndLong, help: ArgumentHelp("Output file, or - for standard output.", valueName: "path"))
+    var output: String?
+
+    @Option(name: .shortAndLong,
+            help: "Minimum error correction level; raised automatically when it doesn't grow the code.")
+    var ecc: ErrorCorrectionLevel = .M
+
+    @Option(name: .shortAndLong, help: "Quiet zone (white border) width in modules.")
+    var margin: Int = 4
+
+    @Argument(help: "Text to encode; multiple arguments are joined with spaces.")
+    var text: [String] = []
+
+    func validate() throws {
+        guard margin >= 0 else { throw ValidationError("--margin must be zero or positive.") }
     }
 
-    struct UsageError: Error { let message: String }
-
-    static func main() {
-        do {
-            let options = try parse(Array(CommandLine.arguments.dropFirst()))
-            try run(options)
-        } catch let error as UsageError {
-            fail("\(error.message)\nRun 'qr --help' for usage.", code: 64) // EX_USAGE
-        } catch {
-            fail("\(error)", code: 1)
-        }
-    }
-
-    static func fail(_ message: String, code: Int32) -> Never {
-        FileHandle.standardError.write(Data("qr: \(message)\n".utf8))
-        exit(code)
-    }
-
-    // MARK: Parsing
-
-    static func parse(_ arguments: [String]) throws -> Options {
-        var options = Options()
-        var iterator = arguments.makeIterator()
-        var onlyPositional = false
-
-        while let argument = iterator.next() {
-            if onlyPositional || argument == "-" || !argument.hasPrefix("-") {
-                options.text.append(argument)
-                continue
-            }
-            if argument == "--" { onlyPositional = true; continue }
-            if argument == "-h" || argument == "--help" {
-                print(usage)
-                exit(0)
-            }
-
-            // Accept --name=value, --name value, -x value and -xvalue.
-            let name: String
-            var inlineValue: String?
-            if argument.hasPrefix("--") {
-                let parts = argument.split(separator: "=", maxSplits: 1)
-                name = String(parts[0])
-                inlineValue = parts.count > 1 ? String(parts[1]) : nil
-            } else {
-                name = String(argument.prefix(2))
-                inlineValue = argument.count > 2 ? String(argument.dropFirst(2)) : nil
-            }
-            func value() throws -> String {
-                if let inlineValue { return inlineValue }
-                guard let next = iterator.next() else { throw UsageError(message: "missing value for \(name)") }
-                return next
-            }
-
-            switch name {
-            case "-f", "--format":
-                let raw = try value()
-                guard let format = OutputFormat(name: raw) else {
-                    throw UsageError(message: "unknown format '\(raw)' (expected png, jpeg, tiff, pdf, svg or text)")
-                }
-                options.format = format
-            case "-s", "--size":
-                options.size = try parseSize(try value())
-            case "-o", "--output":
-                options.output = try value()
-            case "-e", "--ecc":
-                let raw = try value()
-                switch raw.uppercased() {
-                case "L", "LOW": options.ecc = .low
-                case "M", "MEDIUM": options.ecc = .medium
-                case "Q", "QUARTILE": options.ecc = .quartile
-                case "H", "HIGH": options.ecc = .high
-                default: throw UsageError(message: "unknown error correction level '\(raw)' (expected L, M, Q or H)")
-                }
-            case "-m", "--margin":
-                let raw = try value()
-                guard let margin = Int(raw), margin >= 0 else {
-                    throw UsageError(message: "invalid margin '\(raw)'")
-                }
-                options.margin = margin
-            default:
-                throw UsageError(message: "unknown option '\(name)'")
-            }
-        }
-        return options
-    }
-
-    static func parseSize(_ raw: String) throws -> Int {
-        var number = raw.lowercased()
-        for unit in ["px", "pt"] where number.hasSuffix(unit) {
-            number.removeLast(unit.count)
-        }
-        guard let size = Int(number.trimmingCharacters(in: .whitespaces)), size > 0 else {
-            throw UsageError(message: "invalid size '\(raw)' (expected e.g. 500px)")
-        }
-        return size
-    }
-
-    // MARK: Running
-
-    static func run(_ options: Options) throws {
-        let payload = try readPayload(options.text)
-        let code = try QRCode(data: payload, errorCorrection: options.ecc)
-        let renderer = QRRenderer(code: code, margin: options.margin)
+    func run() throws {
+        let payload = try readPayload()
+        let code = try QRCode(data: payload, errorCorrection: ecc.level)
+        let renderer = QRRenderer(code: code, margin: margin)
 
         let stdoutIsTerminal = isatty(STDOUT_FILENO) != 0
-        let inferredFormat = options.output.flatMap { path in
-            OutputFormat(name: (path as NSString).pathExtension)
-        }
-        let format = options.format ?? inferredFormat ?? .png
+        let inferredFormat = output.flatMap { OutputFormat(name: ($0 as NSString).pathExtension) }
+        let format = format ?? inferredFormat ?? .png
 
-        var destination = options.output
+        var destination = output
         if destination == nil && format.isBinary && stdoutIsTerminal {
             destination = "qr.\(format.fileExtension)"
         }
 
         let toTerminal = (destination == nil || destination == "-") && stdoutIsTerminal
-        let data = try renderer.render(as: format, size: options.size, ansiColors: toTerminal)
+        let data = try renderer.render(as: format, size: size.value, ansiColors: toTerminal)
 
         if let destination, destination != "-" {
             try data.write(to: URL(fileURLWithPath: destination), options: .atomic)
-            if options.output == nil {
+            if output == nil {
                 FileHandle.standardError.write(Data("Wrote \(destination)\n".utf8))
             }
         } else {
@@ -165,17 +72,71 @@ struct QRCommand {
         }
     }
 
-    static func readPayload(_ arguments: [String]) throws -> [UInt8] {
-        if !arguments.isEmpty && arguments != ["-"] {
-            return Array(arguments.joined(separator: " ").utf8)
+    private func readPayload() throws -> [UInt8] {
+        if !text.isEmpty && text != ["-"] {
+            return Array(text.joined(separator: " ").utf8)
         }
-        if arguments.isEmpty && isatty(STDIN_FILENO) != 0 {
-            throw UsageError(message: "no text given (pass it as an argument or pipe it on stdin)")
+        if text.isEmpty && isatty(STDIN_FILENO) != 0 {
+            throw ValidationError("No text given (pass it as an argument or pipe it on standard input).")
         }
         var bytes = [UInt8](FileHandle.standardInput.readDataToEndOfFile())
         if bytes.last == 0x0A { bytes.removeLast() }
         if bytes.last == 0x0D { bytes.removeLast() }
-        guard !bytes.isEmpty else { throw UsageError(message: "standard input is empty") }
+        guard !bytes.isEmpty else { throw ValidationError("Standard input is empty.") }
         return bytes
+    }
+}
+
+// MARK: - Argument types
+
+/// A positive pixel/point size, written as `500`, `500px` or `500pt`.
+struct Size: ExpressibleByArgument {
+    let value: Int
+
+    init(_ value: Int) { self.value = value }
+
+    init?(argument: String) {
+        var number = argument.lowercased()
+        for unit in ["px", "pt"] where number.hasSuffix(unit) {
+            number.removeLast(unit.count)
+        }
+        guard let value = Int(number), value > 0 else { return nil }
+        self.value = value
+    }
+
+    var defaultValueDescription: String { "\(value)px" }
+}
+
+extension OutputFormat: ExpressibleByArgument {
+    public init?(argument: String) { self.init(name: argument) }
+    public var defaultValueDescription: String { rawValue }
+    public static var allValueStrings: [String] { allCases.map(\.rawValue) }
+}
+
+/// Command-line spelling of the error correction levels.
+enum ErrorCorrectionLevel: String, CaseIterable, ExpressibleByArgument {
+    case L, M, Q, H
+
+    init?(argument: String) {
+        switch argument.uppercased() {
+        case "L", "LOW": self = .L
+        case "M", "MEDIUM": self = .M
+        case "Q", "QUARTILE": self = .Q
+        case "H", "HIGH": self = .H
+        default: return nil
+        }
+    }
+
+    var level: QRCode.ErrorCorrection {
+        switch self {
+        case .L: .low
+        case .M: .medium
+        case .Q: .quartile
+        case .H: .high
+        }
+    }
+
+    static var allValueDescriptions: [String: String] {
+        ["L": "~7% recovery", "M": "~15% recovery", "Q": "~25% recovery", "H": "~30% recovery"]
     }
 }

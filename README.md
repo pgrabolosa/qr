@@ -6,22 +6,25 @@ A small macOS command-line tool that generates QR Codes as PNG, JPEG, TIFF, PDF,
 qr --format=png --size=500px "https://www.apple.com/"
 ```
 
-It's written in Swift and has no third-party dependencies. The QR encoder is written from scratch using only Foundation. Drawing uses CoreGraphics, and ImageIO saves the image formats.
+It's written in Swift. The QR encoder is written from scratch using only Foundation. Drawing uses CoreGraphics, and ImageIO saves the image formats. Command-line parsing uses Apple's [Swift Argument Parser](https://github.com/apple/swift-argument-parser).
 
 ## Requirements
 
 - macOS 13 or later
 - Swift 6 toolchain (Xcode 16+ or the Command Line Tools: `xcode-select --install`)
+- Network access for the first build, so Swift Package Manager can download Swift Argument Parser
 
 ## Installation
 
-### Build and install to `/usr/local/bin`
+The included `Makefile` builds a release binary with Swift Package Manager and installs it.
+
+### Install to `/usr/local/bin`
 
 ```sh
 git clone <repository-url> qr   # or download and unpack the sources
 cd qr
-swift build -c release
-sudo install .build/release/qr /usr/local/bin/qr
+make
+sudo make install
 ```
 
 Check that it works:
@@ -32,13 +35,37 @@ qr --help
 
 ### Install without `sudo`
 
-Install into a directory you own, and make sure it's on your `PATH`:
+Set `PREFIX` to a directory you own; the tool goes in `$PREFIX/bin`. Make sure that folder is on your `PATH`:
+
+```sh
+make install PREFIX=~/.local
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # if not already on PATH
+```
+
+### Makefile targets
+
+| Command | What it does |
+| --- | --- |
+| `make` | Build the release binary |
+| `make test` | Run the tests |
+| `make install` | Build, then install to `$(PREFIX)/bin` (default `/usr/local/bin`) |
+| `make uninstall` | Remove the installed binary (pass the same `PREFIX` you installed with) |
+| `make universal` | Build one binary that runs on both Apple silicon and Intel Macs |
+| `make clean` | Delete build products |
+
+`DESTDIR` is supported for staged installs, e.g. by packaging scripts: `make install DESTDIR=/tmp/stage`.
+
+### Without `make`
 
 ```sh
 swift build -c release
-mkdir -p ~/.local/bin
-install .build/release/qr ~/.local/bin/qr
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # if not already on PATH
+sudo install "$(swift build -c release --show-bin-path)/qr" /usr/local/bin/qr
+```
+
+Swift Package Manager also has a built-in, still experimental, install command. It installs into `~/.swiftpm/bin`, which you need to add to your `PATH`:
+
+```sh
+swift package experimental-install
 ```
 
 ### Run without installing
@@ -50,7 +77,7 @@ swift run qr -f text "Hello"
 ### Uninstall
 
 ```sh
-sudo rm /usr/local/bin/qr      # or: rm ~/.local/bin/qr
+sudo make uninstall               # or: make uninstall PREFIX=~/.local
 ```
 
 ## Usage
@@ -63,12 +90,14 @@ The text to encode comes from the arguments. Multiple arguments are joined with 
 
 | Option | Description |
 | --- | --- |
-| `-f`, `--format=FORMAT` | `png` (default), `jpeg`, `tiff`, `pdf`, `svg`, or `text`. When omitted, the format is taken from the `--output` file extension. |
-| `-s`, `--size=SIZE` | Width and height, e.g. `500px` (default `512px`). Points for PDF; ignored for `text`. |
-| `-o`, `--output=PATH` | Output file, or `-` for standard output. |
-| `-e`, `--ecc=LEVEL` | Minimum error correction: `L` (~7%), `M` (~15%, default), `Q` (~25%), `H` (~30%). Raised automatically when that doesn't make the code bigger. |
-| `-m`, `--margin=N` | Width of the white border (quiet zone) in modules (default `4`). |
+| `-f`, `--format <format>` | `png` (default), `jpeg`, `tiff`, `pdf`, `svg`, or `text`. When omitted, the format is taken from the `--output` file extension. |
+| `-s`, `--size <size>` | Width and height, e.g. `500px` (default `512px`). Points for PDF; ignored for `text`. |
+| `-o`, `--output <path>` | Output file, or `-` for standard output. |
+| `-e`, `--ecc <ecc>` | Minimum error correction: `L` (~7%), `M` (~15%, default), `Q` (~25%), `H` (~30%). Raised automatically when that doesn't make the code bigger. |
+| `-m`, `--margin <margin>` | Width of the white border (quiet zone) in modules (default `4`). |
 | `-h`, `--help` | Show help. |
+
+Long options accept their value either after a space or after `=` (`--size 500px` or `--size=500px`).
 
 ### Where the output goes
 
@@ -119,5 +148,6 @@ The tests decode every generated code with CoreImage's built-in QR detector. The
 | --- | --- |
 | `Sources/QRCore/QRCode.swift` | QR encoder: mode selection, Reed–Solomon error correction, module placement, masking |
 | `Sources/QRCore/Rendering.swift` | Output: CoreGraphics drawing, ImageIO for PNG/JPEG/TIFF, PDF, SVG, terminal text |
-| `Sources/qr/QRCommand.swift` | Command-line parsing and I/O |
+| `Sources/qr/QRCommand.swift` | Command-line interface (Swift Argument Parser) and I/O |
 | `Tests/QRCoreTests/` | Tests |
+| `Makefile` | Build, test, install and uninstall targets |
